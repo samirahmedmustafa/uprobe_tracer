@@ -1,5 +1,8 @@
 #!/bin/sh
-set -eo pipefail
+#set -eo pipefail
+
+uprobe_base="/sys/kernel/debug/tracing"
+uprobe_events="${uprobe_base}/uprobe_events"
 
 show_help()
 {
@@ -8,21 +11,124 @@ show_help()
   printf "\texec(required): the executable\n"
   printf "\tfunc(optional): if added list the with lineno and args\n"
   printf "\tprobe(optional): if added generate the ftrace probe\n"
-  printf "\t-e(optional): enable the live tracer\n"
+  printf "\t-e(optional): enable the live tracer\n\n"
+}
+
+show_arg_help()
+{
+  printf "Usage: $0 ${action} [<ARGS>]\n\n"
+  printf "args:\n\n"
+  
+  while [[ $# > 0 ]]; do
+    printf "\t${1}\n\n"
+    shift
+  done
+}
+
+handler_int() {
+  local probe_name=$1
+  disable_probe $probe_name
+  unregister_probe
+  exit 1
+}
+trap 'handler_int ${probe_name}' SIGINT
+
+get_probe_path()
+{
+  local probe_name=$1
+
+  echo "${uprobe_base}/events/${probe_name}/enable"
+}
+
+enable_probe()
+{
+  local probe=$1
+
+  local probe_name=$(echo $probe | awk -F' ' '{print $1}' | awk -F'/' '{ print $1 }' | awk -F':' '{print $2}')
+  local probe_path=$(get_probe_path ${probe_name})
+
+  echo 1 > $probe_path
+  printf "Probe %s is enabled successfully\n" $probe_path
+}
+
+disable_probe()
+{
+  local probe_name=$probe_name
+  local probe_path=$(get_probe_path $probe_name)
+
+  echo 0 > $probe_path
+  printf "Probe %s is disabled successfully\n" $probe_path
+}
+
+unregister_probe()
+{
+  echo > ${uprobe_events}
+  if [[ $? == 0 ]]; then
+    printf "Probe %s is unregistered successfully\n" ${probe}
+  else
+    printf "Probe %s unregisteration is unsuccessful\n" "${probe}"
+  fi
+}
+
+register_probe()
+{
+  local probe=$1
+
+  echo $probe > ${uprobe_events}
+  if [[ $? == 0 ]]; then
+    printf "Probe %s is registered successfully\n" ${probe}
+  else
+    printf "Probe %s registeration is unsuccessful\n" "${probe}"
+  fi
+}
+
+live_probe()
+{
+  local exe=$1
+  local func=$2
+  local args=$3
+  local lines=$(gen_probe $exe $func $args 2>/dev/null | wc -l)
+  if [[ $lines > 1 ]]; then
+    printf "You have more than one probe options, pick the one you prefer\n"
+    gen_probe $exe $func "$args"
+    printf "\nYou need to register your probe in %s, live trace on ${uprobe_base}/trace_pipe and later you need to deregister manually too\n" ${uprobe_events}
+    exit 1
+  fi
+
+  local probe=$(gen_probe $exe $func "$args" 2>/dev/null | tail -1)
+  register_probe "$probe"
+  enable_probe $probe
+  printf "\n\nTracing $probe, press ctrl + c to cancel..\n\n"
+  cat ${uprobe_base}/trace_pipe 
+}
+
+gen_probe()
+{
+  local exe=$1
+  local func=$2
+
+  local args=$3
+
+  perf probe -x $exe --dry-run -D "$func $args"
 }
 
 list_exec_funcs()
 {
   local exe=$1
+
+  printf "\nAvailable function:\n\n"
   perf probe -x $exe -F
+  printf "\n"
 }
 
 list_func_lines()
 {
   local exe=$1
   local func=$2
+  local func_name=$(echo $func | awk -F':' '{ print $1 }')
+  local func_idx=$(echo $func | awk -F':' '{ print $2 }')
 
-  perf probe -x ${exe} --dry-run --line "${func}"
+  perf probe -x ${exe} --dry-run --line "${func_name}"
 }
 
 is_file_exist()
@@ -40,10 +146,12 @@ is_func_exist()
 {
   local exe=$1
   local func=$2
+  local func_name=$(echo $func | awk -F':' '{ print $1 }')
+  local func_idx=$(echo $func | awk -F':' '{ print $2 }')
 
-  list_exec_funcs $exe | grep $func 
+  list_exec_funcs $exe | grep $func_name
   if [[ $? != 0 ]]; then
-    printf "Unable to find the function %s in the executable %s\n" $func $exe
+    printf "Unable to find the function %s in the executable %s\n" $func_name $exe
     show_help
     exit 1
   fi
@@ -62,26 +170,58 @@ choice=$#
 case "$choice" in
     1)
 	exe=$1
-
 	is_file_exist $exe
+
 	list_exec_funcs $exe
         ;;
     2)
 	exe=$1
-	func=$2
-
 	is_file_exist $exe
+	shift
+	func=$1
+	if [[ "$func" =~ ^(-h|--help)$ ]]; then
+	  show_arg_help "func(optional): if added list the with lineno and args"
+	  exit 1
+	fi
 	is_func_exist $exe $func
 
 	list_func_lines $exe $func
         ;;
     3)
-        echo "Current logged-in users:"
-        who
+	exe=$1
+	is_file_exist $exe
+	shift
+	func=$1
+	if [[ "$func" =~ ^(-h|--help)$ ]]; then
+	  show_arg_help "func(optional): if added list the with lineno and args"
+	  exit 1
+	fi
+	is_func_exist $exe $func
+	shift
+	args=$1
+
+        gen_probe $exe $func "$args"
         ;;
     4)
-        echo "Exiting script. Goodbye!"
-        exit 0
+        exe=$1
+        is_file_exist $exe
+        shift
+        func=$1
+        if [[ "$func" =~ ^(-h|--help)$ ]]; then
+          show_arg_help "func(optional): if added list the with lineno and args"
+          exit 1
+        fi
+        is_func_exist $exe $func
+        shift
+        args=$1
+        shift
+        opt=$1
+        if [[ "$opt" != "-e" ]]; then
+          show_arg_help "-e(optional): enable the live tracer"
+          exit 1
+        fi
+
+        live_probe $exe $func "$args"
         ;;
     *)
         echo "Error: Invalid selection. Please choose a number between 1 and 4."
