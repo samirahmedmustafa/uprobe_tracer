@@ -1,0 +1,91 @@
+#!/bin/sh
+set -eo pipefail
+
+show_help()
+{
+  printf "Usage: %s exec [func] [probe] [-e|--enable]\n" ${0}
+  printf "\nArgs:\n"
+  printf "\texec(required): the executable\n"
+  printf "\tfunc(optional): if added list the with lineno and args\n"
+  printf "\tprobe(optional): if added generate the ftrace probe\n"
+  printf "\t-e(optional): enable the live tracer\n"
+}
+
+list_exec_funcs()
+{
+  local exe=$1
+  perf probe -x $exe -F
+}
+
+list_func_lines()
+{
+  local exe=$1
+  local func=$2
+
+  perf probe -x ${exe} --dry-run --line "${func}"
+}
+
+is_file_exist()
+{
+  local exe=$1
+
+  if [ ! -e $exe ]; then
+    printf "Unable to find the executable %s\n" $1
+    show_help
+    exit 1
+  fi
+}
+
+is_func_exist()
+{
+  local exe=$1
+  local func=$2
+
+  list_exec_funcs $exe | grep $func 
+  if [[ $? != 0 ]]; then
+    printf "Unable to find the function %s in the executable %s\n" $func $exe
+    show_help
+    exit 1
+  fi
+}
+
+
+##################### main #####################
+
+if [[ $# == 0 ]]; then
+  show_help
+  exit 1
+fi
+
+choice=$#
+
+case "$choice" in
+    1)
+	exe=$1
+
+	is_file_exist $exe
+	list_exec_funcs $exe
+        ;;
+    2)
+	exe=$1
+	func=$2
+
+	is_file_exist $exe
+	is_func_exist $exe $func
+
+	list_func_lines $exe $func
+        ;;
+    3)
+        echo "Current logged-in users:"
+        who
+        ;;
+    4)
+        echo "Exiting script. Goodbye!"
+        exit 0
+        ;;
+    *)
+        echo "Error: Invalid selection. Please choose a number between 1 and 4."
+        exit 1
+        ;;
+esac
+
