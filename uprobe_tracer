@@ -110,6 +110,7 @@ gen_probe()
   local args=$3
 
   perf probe -x $exe --dry-run -D "$func $args"
+  printf "\nYou need to register your probe in %s, live trace on ${uprobe_base}/trace_pipe and later you need to deregister manually too\n" ${uprobe_events}
 }
 
 list_exec_funcs()
