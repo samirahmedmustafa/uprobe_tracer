@@ -87,17 +87,17 @@ live_probe()
   local exe=$1
   local func=$2
   local args=$3
-  local lines=$(gen_probe $exe $func $args 2>/dev/null | wc -l)
-  if [[ $lines > 1 ]]; then
+  local lines=$(gen_probe $exe $func $args | wc -l)
+  if [[ $lines > 3 ]]; then
     printf "You have more than one probe options, pick the one you prefer\n"
     gen_probe $exe $func "$args"
-    printf "\nYou need to register your probe in %s, live trace on ${uprobe_base}/trace_pipe and later you need to deregister manually too\n" ${uprobe_events}
     exit 1
   fi
 
-  local probe=$(gen_probe $exe $func "$args" 2>/dev/null | tail -1)
+  local probe=$(gen_probe $exe $func "$args" 2>/dev/null | grep 'p:probe')
+
   register_probe "$probe"
-  enable_probe $probe
+  enable_probe "$probe"
   printf "\n\nTracing $probe, press ctrl + c to cancel..\n\n"
   cat ${uprobe_base}/trace_pipe 
 }
@@ -106,7 +106,6 @@ gen_probe()
 {
   local exe=$1
   local func=$2
-
   local args=$3
 
   perf probe -x $exe --dry-run -D "$func $args"
