@@ -6,12 +6,14 @@ uprobe_events="${uprobe_base}/uprobe_events"
 
 show_help()
 {
-  printf "Usage: %s exec [func] [probe] [-e|--enable]\n" ${0}
+  printf "Usage: %s exec [func] [probe] [-e|--enable] [-p pid]\n" ${0}
   printf "\nArgs:\n"
   printf "\texec(required): the executable\n"
   printf "\tfunc(optional): if added list the with lineno and args\n"
   printf "\tprobe(optional): if added generate the ftrace probe\n"
-  printf "\t-e(optional): enable the live tracer\n\n"
+  printf "\t-e(optional): enable the live tracer\n"
+  printf "\t-p(optional): pid filter\n"
+  printf "\n"
 }
 
 show_arg_help()
@@ -43,7 +45,6 @@ get_probe_path()
 enable_probe()
 {
   local probe=$1
-
   local probe_name=$(echo $probe | awk -F' ' '{print $1}' | awk -F'/' '{ print $1 }' | awk -F':' '{print $2}')
   local probe_path=$(get_probe_path ${probe_name})
 
@@ -58,6 +59,24 @@ disable_probe()
 
   echo 0 > $probe_path
   printf "Probe %s is disabled successfully\n" $probe_path
+}
+
+set_pid_filter()
+{
+  local pid=$1
+  local probe=$2
+  local func=$3
+  local probe_name=$(echo $probe | awk -F' ' '{print $1}' | awk -F'/' '{ print $1 }' | awk -F':' '{print $2}')
+  local probe_path=$(get_probe_path ${probe_name})
+  #/sys/kernel/debug/tracing/events/probe_main/take_string/filter
+  local filter_path="${uprobe_base}/events/${probe_name}/${func}/filter"
+
+  if [ -z $pid ]; then
+    printf "No pid is submitted for filtering, pid: %d\n" $pid 
+  else
+    printf "Filtering for pid: %d\n" $pid 
+    echo "common_pid == $pid" > ${filter_path}
+  fi
 }
 
 unregister_probe()
@@ -87,6 +106,7 @@ live_probe()
   local exe=$1
   local func=$2
   local args=$3
+  local pid=$4
   local lines=$(gen_probe $exe $func $args | wc -l)
   if [[ $lines > 3 ]]; then
     printf "You have more than one probe options, pick the one you prefer\n"
@@ -97,6 +117,9 @@ live_probe()
   local probe=$(gen_probe $exe $func "$args" 2>/dev/null | grep 'p:probe')
 
   register_probe "$probe"
+  if [ ! -z pid ]; then
+    set_pid_filter $pid "$probe" $func
+  fi
   enable_probe "$probe"
   printf "\n\nTracing $probe, press ctrl + c to cancel..\n\n"
   cat ${uprobe_base}/trace_pipe 
@@ -222,6 +245,30 @@ case "$choice" in
         fi
 
         live_probe $exe $func "$args"
+        ;;
+    6)
+        exe=$1
+        is_file_exist $exe
+        shift
+        func=$1
+        if [[ "$func" =~ ^(-h|--help)$ ]]; then
+          show_arg_help "func(optional): if added list the with lineno and args"
+          exit 1
+        fi
+        is_func_exist $exe $func
+        shift
+        args=$1
+        shift
+        opt1=$1
+        shift
+        shift
+        opt2=$1
+        if [[ "$opt1" != "-e" && "$opt1" != "-p" ]]; then
+          show_arg_help "-e(optional): enable the live tracer" "-p(optional): pid filter"
+          exit 1
+        fi
+
+        live_probe $exe $func "$args" $opt2
         ;;
     *)
         echo "Error: Invalid selection. Please choose a number between 1 and 4."
