@@ -3,7 +3,7 @@
 
 uprobe_base="/sys/kernel/debug/tracing"
 uprobe_events="${uprobe_base}/uprobe_events"
-glob_probe=""
+probe=""
 probe_name=""
 probe_path=""
 func_name=""
@@ -14,7 +14,7 @@ show_help()
   printf "\nArgs:\n"
   printf "\texec(required): the executable\n"
   printf "\tfunc(optional): if added list the with lineno and args\n"
-  printf "\tprobe(optional): if added generate the ftrace probe\n"
+  printf "\tprobe(optional): if added generate the ftrace probe (put between quotes as different args expressed separated by spaces)\n"
   printf "\t-e(optional): enable the live tracer\n"
   printf "\t-p(optional): pid filter (-p pid)\n"
   printf "\n"
@@ -46,7 +46,6 @@ disable_probe()
 
 unregister_probe()
 {
-  #local probe_name=$(echo $glob_probe | awk -F' ' '{print $1}' | awk -F'/' '{ print $1 }' | awk -F':' '{print $2}')
   local probe_unreg_expres="-:${probe_name}/${func}"
   echo "${probe_unreg_expres}" >> ${uprobe_events} >> ${uprobe_events}
   #echo "-:probe_main/take_string" >> /sys/kernel/debug/tracing/uprobe_events
@@ -67,7 +66,6 @@ get_probe_path()
 enable_probe()
 {
   local probe=$1
-  probe_name=$(echo $probe | awk -F' ' '{print $1}' | awk -F'/' '{ print $1 }' | awk -F':' '{print $2}')
   probe_path=$(get_probe_path ${probe_name})
 
   echo 1 > $probe_path
@@ -95,11 +93,16 @@ register_probe()
 {
   local probe=$1
 
-  echo $probe >> ${uprobe_events}
+  if [ -f "${uprobe_base}/events/${probe_name}/enable" ]; then
+    echo 0 > ${uprobe_base}/events/${probe_name}/enable
+  fi
+
+  echo $probe > ${uprobe_events}
   if [[ $? == 0 ]]; then
     printf "Probe %s is registered successfully\n" ${probe}
   else
-    printf "Probe %s registeration is unsuccessful\n" "${probe}"
+    printf "Probe %s registeration is unsuccessful, probe: %s, uprobe_events: %s\n" "${probe}" ${uprobe_events}
+    exit 1
   fi
 }
 
@@ -116,11 +119,11 @@ live_probe()
     exit 1
   fi
 
-  local probe=$(gen_probe $exe $func "$args" 2>/dev/null | grep 'p:probe')
-  glob_probe="${probe}"
+  probe=$(gen_probe $exe $func "$args" 2>/dev/null | grep 'p:probe')
+  probe_name=$(echo $probe | awk -F' ' '{print $1}' | awk -F'/' '{ print $1 }' | awk -F':' '{print $2}')
 
   register_probe "$probe"
-  if [ ! -z pid ]; then
+  if [ ! -z "${pid}" ]; then
     set_pid_filter $pid "$probe" $func
   fi
   enable_probe "$probe"
@@ -135,7 +138,7 @@ gen_probe()
   local args=$3
 
   perf probe -x $exe --dry-run -D "$func $args"
-  printf "\nYou need to register your probe in %s, live trace on ${uprobe_base}/trace_pipe and later you need to deregister manually too\n" ${uprobe_events}
+  printf "\nYou need to register your probe in %s, live trace on %s, and later you need to deregister manually too\n" ${uprobe_events} "${uprobe_base}/trace_pipe"
 }
 
 list_exec_funcs()
