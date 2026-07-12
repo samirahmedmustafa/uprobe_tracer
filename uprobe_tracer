@@ -3,6 +3,10 @@
 
 uprobe_base="/sys/kernel/debug/tracing"
 uprobe_events="${uprobe_base}/uprobe_events"
+glob_probe=""
+probe_name=""
+probe_path=""
+func_name=""
 
 show_help()
 {
@@ -12,7 +16,7 @@ show_help()
   printf "\tfunc(optional): if added list the with lineno and args\n"
   printf "\tprobe(optional): if added generate the ftrace probe\n"
   printf "\t-e(optional): enable the live tracer\n"
-  printf "\t-p(optional): pid filter\n"
+  printf "\t-p(optional): pid filter (-p pid)\n"
   printf "\n"
 }
 
@@ -28,12 +32,30 @@ show_arg_help()
 }
 
 handler_int() {
-  local probe_name=$1
-  disable_probe $probe_name
+  disable_probe 
   unregister_probe
   exit 1
 }
 trap 'handler_int ${probe_name}' SIGINT
+
+disable_probe()
+{
+  echo 0 > $probe_path
+  printf "Probe %s is disabled successfully\n" $probe_path
+}
+
+unregister_probe()
+{
+  #local probe_name=$(echo $glob_probe | awk -F' ' '{print $1}' | awk -F'/' '{ print $1 }' | awk -F':' '{print $2}')
+  local probe_unreg_expres="-:${probe_name}/${func}"
+  echo "${probe_unreg_expres}" >> ${uprobe_events} >> ${uprobe_events}
+  #echo "-:probe_main/take_string" >> /sys/kernel/debug/tracing/uprobe_events
+  if [[ $? == 0 ]]; then
+    printf "Probe %s is unregistered successfully\n" ${probe}
+  else
+    printf "Probe %s unregisteration is unsuccessful\n" "${probe}"
+  fi
+}
 
 get_probe_path()
 {
@@ -45,20 +67,11 @@ get_probe_path()
 enable_probe()
 {
   local probe=$1
-  local probe_name=$(echo $probe | awk -F' ' '{print $1}' | awk -F'/' '{ print $1 }' | awk -F':' '{print $2}')
-  local probe_path=$(get_probe_path ${probe_name})
+  probe_name=$(echo $probe | awk -F' ' '{print $1}' | awk -F'/' '{ print $1 }' | awk -F':' '{print $2}')
+  probe_path=$(get_probe_path ${probe_name})
 
   echo 1 > $probe_path
   printf "Probe %s is enabled successfully\n" $probe_path
-}
-
-disable_probe()
-{
-  local probe_name=$probe_name
-  local probe_path=$(get_probe_path $probe_name)
-
-  echo 0 > $probe_path
-  printf "Probe %s is disabled successfully\n" $probe_path
 }
 
 set_pid_filter()
@@ -68,7 +81,6 @@ set_pid_filter()
   local func=$3
   local probe_name=$(echo $probe | awk -F' ' '{print $1}' | awk -F'/' '{ print $1 }' | awk -F':' '{print $2}')
   local probe_path=$(get_probe_path ${probe_name})
-  #/sys/kernel/debug/tracing/events/probe_main/take_string/filter
   local filter_path="${uprobe_base}/events/${probe_name}/${func}/filter"
 
   if [ -z $pid ]; then
@@ -79,21 +91,11 @@ set_pid_filter()
   fi
 }
 
-unregister_probe()
-{
-  echo > ${uprobe_events}
-  if [[ $? == 0 ]]; then
-    printf "Probe %s is unregistered successfully\n" ${probe}
-  else
-    printf "Probe %s unregisteration is unsuccessful\n" "${probe}"
-  fi
-}
-
 register_probe()
 {
   local probe=$1
 
-  echo $probe > ${uprobe_events}
+  echo $probe >> ${uprobe_events}
   if [[ $? == 0 ]]; then
     printf "Probe %s is registered successfully\n" ${probe}
   else
@@ -104,7 +106,7 @@ register_probe()
 live_probe()
 {
   local exe=$1
-  local func=$2
+  func=$2
   local args=$3
   local pid=$4
   local lines=$(gen_probe $exe $func $args | wc -l)
@@ -115,6 +117,7 @@ live_probe()
   fi
 
   local probe=$(gen_probe $exe $func "$args" 2>/dev/null | grep 'p:probe')
+  glob_probe="${probe}"
 
   register_probe "$probe"
   if [ ! -z pid ]; then
@@ -128,7 +131,7 @@ live_probe()
 gen_probe()
 {
   local exe=$1
-  local func=$2
+  func=$2
   local args=$3
 
   perf probe -x $exe --dry-run -D "$func $args"
@@ -147,7 +150,7 @@ list_exec_funcs()
 list_func_lines()
 {
   local exe=$1
-  local func=$2
+  func=$2
   local func_name=$(echo $func | awk -F':' '{ print $1 }')
   local func_idx=$(echo $func | awk -F':' '{ print $2 }')
 
@@ -246,6 +249,29 @@ case "$choice" in
 
         live_probe $exe $func "$args"
         ;;
+    5)
+        exe=$1
+        is_file_exist $exe
+        shift
+        func=$1
+        if [[ "$func" =~ ^(-h|--help)$ ]]; then
+          show_arg_help "func(optional): if added list the with lineno and args"
+          exit 1
+        fi
+        is_func_exist $exe $func
+        shift
+        args=$1
+        shift
+        opt1=$1
+        shift
+        opt2=$1
+        if [[ "$opt1" == "-e" ]]; then
+	  show_arg_help "-p(optional): pid filter (-p pid)"
+  	else
+	  printf "Unknown options: %s\n" ${opt1}
+	  show_arg_help "-e(optional): enable the live tracer" "-p(optional): pid filter (-p pid)"
+        fi
+        ;;
     6)
         exe=$1
         is_file_exist $exe
@@ -263,8 +289,8 @@ case "$choice" in
         shift
         shift
         opt2=$1
-        if [[ "$opt1" != "-e" && "$opt1" != "-p" ]]; then
-          show_arg_help "-e(optional): enable the live tracer" "-p(optional): pid filter"
+        if [[ "$opt1" != "-e" && "$opt2" != "-p" ]]; then
+	  show_arg_help "-e(optional): enable the live tracer" "-p(optional): pid filter(-p pid)"
           exit 1
         fi
 
