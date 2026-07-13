@@ -3,10 +3,20 @@
 
 uprobe_base="/sys/kernel/debug/tracing"
 uprobe_events="${uprobe_base}/uprobe_events"
-probe=""
-probe_name=""
-probe_path=""
-func_name=""
+exe=""
+args=""
+func=""
+rfunc=""
+#probe_name=""
+#rprobe_name=""
+#probe=""
+#rprobe=""
+
+#probe_path=""
+
+#rprobe_name=""
+#rprobe_path=""
+#func_name=""
 
 show_help()
 {
@@ -47,13 +57,30 @@ disable_probe()
 unregister_probe()
 {
   local probe_unreg_expres="-:${probe_name}/${func}"
-  echo "${probe_unreg_expres}" >> ${uprobe_events} >> ${uprobe_events}
-  #echo "-:probe_main/take_string" >> /sys/kernel/debug/tracing/uprobe_events
+  local rprobe_unreg_expres="-:${rprobe_name}/${rfunc}"
+  echo "${probe_unreg_expres}" >> ${uprobe_events}
+  echo "${rprobe_unreg_expres}" >> ${uprobe_events}
   if [[ $? == 0 ]]; then
     printf "Probe %s is unregistered successfully\n" ${probe}
   else
     printf "Probe %s unregisteration is unsuccessful\n" "${probe}"
   fi
+}
+
+get_func_name()
+{
+  local probe_type=$1
+  local probe=$2
+
+  echo $probe | grep "${probe_type}" | awk -F' ' '{ print $1 }' | awk -F'/' '{ print $2 }'
+}
+
+get_probe_name()
+{
+  local probe_type=$1
+  local probe=$2
+
+  echo $probe | grep ${probe_type} | awk -F' ' '{ print $1 }' | awk -F'/' '{ print $1 }' | awk -F':' '{ print $2 }'
 }
 
 get_probe_path()
@@ -66,6 +93,7 @@ get_probe_path()
 enable_probe()
 {
   local probe=$1
+  local probe_name=$(get_probe_name "^p:probe" $probe)
   probe_path=$(get_probe_path ${probe_name})
 
   echo 1 > $probe_path
@@ -76,16 +104,17 @@ set_pid_filter()
 {
   local pid=$1
   local probe=$2
-  local func=$3
-  local probe_name=$(echo $probe | awk -F' ' '{print $1}' | awk -F'/' '{ print $1 }' | awk -F':' '{print $2}')
+  local probe_type=$3
+  local probe_name=$(get_probe_name ${probe_type} $probe)
   local probe_path=$(get_probe_path ${probe_name})
   local filter_path="${uprobe_base}/events/${probe_name}/${func}/filter"
+  local rfilter_path="${uprobe_base}/events/${probe_name}/${rfunc}/filter"
 
   if [ -z $pid ]; then
     printf "No pid is submitted for filtering, pid: %d\n" $pid 
   else
     printf "Filtering for pid: %d\n" $pid 
-    echo "common_pid == $pid" > ${filter_path}
+    echo "common_pid == $pid" > ${filter_path} && echo "common_pid == $pid" > ${rfilter_path}
   fi
 }
 
@@ -106,25 +135,44 @@ register_probe()
   fi
 }
 
+register_rprobe()
+{
+  local rprobe=$1
+
+  if [ -f "${uprobe_base}/events/${probe_name}/enable" ]; then
+    echo 0 > ${uprobe_base}/events/${probe_name}/enable
+  fi
+
+  echo $rprobe >> ${uprobe_events}
+  if [[ $? == 0 ]]; then
+    printf "Probe %s is registered successfully\n" ${rprobe}
+  else
+    printf "Probe %s registeration is unsuccessful, probe: %s, uprobe_events: %s\n" "${rprobe}" ${uprobe_events}
+    exit 1
+  fi
+}
+
 live_probe()
 {
-  local exe=$1
-  func=$2
-  local args=$3
-  local pid=$4
-  local lines=$(gen_probe $exe $func $args | wc -l)
+  local pid=$1
+  local lines=$(gen_probe "$args" | wc -l)
   if [[ $lines > 3 ]]; then
     printf "You have more than one probe options, pick the one you prefer\n"
-    gen_probe $exe $func "$args"
+    gen_probe "$args"
     exit 1
   fi
 
-  probe=$(gen_probe $exe $func "$args" 2>/dev/null | grep 'p:probe')
-  probe_name=$(echo $probe | awk -F' ' '{print $1}' | awk -F'/' '{ print $1 }' | awk -F':' '{print $2}')
+  local probe=$(gen_probe "$args" 2>/dev/null | grep 'p:probe')
+  local rprobe=$(gen_rprobe $exe 2>/dev/null | grep 'r:probe')
+  rfunc=$(get_func_name "^r:probe" $rprobe)
+  local probe_name=$(get_probe_name "^p:probe" $probe)
+  local rprobe_name=$(get_probe_name "^r:probe" $rprobe)
 
   register_probe "$probe"
+  register_rprobe "$rprobe"
   if [ ! -z "${pid}" ]; then
-    set_pid_filter $pid "$probe" $func
+    set_pid_filter $pid "$probe" "^p:probe"
+    set_pid_filter $pid "$rprobe" "^r:probe"
   fi
   enable_probe "$probe"
   printf "\n\nTracing $probe, press ctrl + c to cancel..\n\n"
@@ -133,18 +181,17 @@ live_probe()
 
 gen_probe()
 {
-  local exe=$1
-  func=$2
-  local args=$3
+  local args=$1
+  perf probe -x $exe --dry-run -D "$func ${args}"
+}
 
-  perf probe -x $exe --dry-run -D "$func $args"
-  printf "\nYou need to register your probe in %s, live trace on %s, and later you need to deregister manually too\n" ${uprobe_events} "${uprobe_base}/trace_pipe"
+gen_rprobe()
+{
+  perf probe -x $exe --dry-run -D "${func}%return \$retval"
 }
 
 list_exec_funcs()
 {
-  local exe=$1
-
   printf "\nAvailable function:\n\n"
   perf probe -x $exe -F
   printf "\n"
@@ -152,8 +199,6 @@ list_exec_funcs()
 
 list_func_lines()
 {
-  local exe=$1
-  func=$2
   local func_name=$(echo $func | awk -F':' '{ print $1 }')
   local func_idx=$(echo $func | awk -F':' '{ print $2 }')
 
@@ -162,8 +207,6 @@ list_func_lines()
 
 is_file_exist()
 {
-  local exe=$1
-
   if [ ! -e $exe ]; then
     printf "Unable to find the executable %s\n" $1
     show_help
@@ -173,8 +216,6 @@ is_file_exist()
 
 is_func_exist()
 {
-  local exe=$1
-  local func=$2
   local func_name=$(echo $func | awk -F':' '{ print $1 }')
   local func_idx=$(echo $func | awk -F':' '{ print $2 }')
 
@@ -199,48 +240,49 @@ choice=$#
 case "$choice" in
     1)
 	exe=$1
-	is_file_exist $exe
-
-	list_exec_funcs $exe
+	is_file_exist
+	list_exec_funcs
         ;;
     2)
 	exe=$1
-	is_file_exist $exe
+	is_file_exist
 	shift
 	func=$1
 	if [[ "$func" =~ ^(-h|--help)$ ]]; then
 	  show_arg_help "func(optional): if added list the with lineno and args"
 	  exit 1
 	fi
-	is_func_exist $exe $func
 
-	list_func_lines $exe $func
+	is_func_exist
+	list_func_lines
         ;;
     3)
 	exe=$1
-	is_file_exist $exe
+	is_file_exist
 	shift
 	func=$1
 	if [[ "$func" =~ ^(-h|--help)$ ]]; then
 	  show_arg_help "func(optional): if added list the with lineno and args"
 	  exit 1
 	fi
-	is_func_exist $exe $func
+	is_func_exist
 	shift
 	args=$1
 
-        gen_probe $exe $func "$args"
+        gen_probe "${args}"
+        gen_rprobe
+  	printf "\nYou need to register your probe in %s, live trace on %s, and later you need to deregister manually too\n" ${uprobe_events} "${uprobe_base}/trace_pipe"
         ;;
     4)
         exe=$1
-        is_file_exist $exe
+        is_file_exist
         shift
         func=$1
         if [[ "$func" =~ ^(-h|--help)$ ]]; then
           show_arg_help "func(optional): if added list the with lineno and args"
           exit 1
         fi
-        is_func_exist $exe $func
+        is_func_exist
         shift
         args=$1
         shift
@@ -250,18 +292,18 @@ case "$choice" in
           exit 1
         fi
 
-        live_probe $exe $func "$args"
+        live_probe
         ;;
     5)
         exe=$1
-        is_file_exist $exe
+        is_file_exist
         shift
         func=$1
         if [[ "$func" =~ ^(-h|--help)$ ]]; then
           show_arg_help "func(optional): if added list the with lineno and args"
           exit 1
         fi
-        is_func_exist $exe $func
+        is_func_exist
         shift
         args=$1
         shift
@@ -277,27 +319,28 @@ case "$choice" in
         ;;
     6)
         exe=$1
-        is_file_exist $exe
+        is_file_exist
         shift
         func=$1
         if [[ "$func" =~ ^(-h|--help)$ ]]; then
           show_arg_help "func(optional): if added list the with lineno and args"
           exit 1
         fi
-        is_func_exist $exe $func
+        is_func_exist
         shift
         args=$1
         shift
         opt1=$1
         shift
-        shift
         opt2=$1
+        shift
+        pid=$1
         if [[ "$opt1" != "-e" && "$opt2" != "-p" ]]; then
 	  show_arg_help "-e(optional): enable the live tracer" "-p(optional): pid filter(-p pid)"
           exit 1
         fi
 
-        live_probe $exe $func "$args" $opt2
+        live_probe $pid
         ;;
     *)
         echo "Error: Invalid selection. Please choose a number between 1 and 4."
