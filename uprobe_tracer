@@ -1,12 +1,17 @@
 #!/bin/sh
 #set -eo pipefail
 
+events="/sys/kernel/debug/tracing/events"
 uprobe_base="/sys/kernel/debug/tracing"
 uprobe_events="${uprobe_base}/uprobe_events"
 exe=""
 args=""
 func=""
 rfunc=""
+tmp_probes=/tmp/tmp_probes
+tmp_rprobes=/tmp/tmp_rprobes
+probes=/tmp/probes
+rprobes=/tmp/rprobes
 #probe_name=""
 #rprobe_name=""
 #probe=""
@@ -42,8 +47,15 @@ show_arg_help()
 }
 
 handler_int() {
-  disable_probe 
-  unregister_probe
+  probe_ops "disable"
+  probe_ops "unregister"
+
+  if [ -f ${tmp_probes} ]; then
+    rm -f ${tmp_probes}
+  fi
+  if [ -f ${tmp_rprobes} ]; then
+    rm -f ${tmp_rprobes}
+  fi
   exit 1
 }
 trap 'handler_int ${probe_name}' SIGINT
@@ -52,19 +64,6 @@ disable_probe()
 {
   echo 0 > $probe_path
   printf "Probe %s is disabled successfully\n" $probe_path
-}
-
-unregister_probe()
-{
-  local probe_unreg_expres="-:${probe_name}/${func}"
-  local rprobe_unreg_expres="-:${rprobe_name}/${rfunc}"
-  echo "${probe_unreg_expres}" >> ${uprobe_events}
-  echo "${rprobe_unreg_expres}" >> ${uprobe_events}
-  if [[ $? == 0 ]]; then
-    printf "Probe %s is unregistered successfully\n" ${probe}
-  else
-    printf "Probe %s unregisteration is unsuccessful\n" "${probe}"
-  fi
 }
 
 get_func_name()
@@ -92,11 +91,7 @@ get_probe_path()
 
 enable_probe()
 {
-  local probe=$1
-  local probe_name=$(get_probe_name "^p:probe" $probe)
-  probe_path=$(get_probe_path ${probe_name})
-
-  echo 1 > $probe_path
+  probe_ops "enable"
   printf "Probe %s is enabled successfully\n" $probe_path
 }
 
@@ -118,76 +113,94 @@ set_pid_filter()
   fi
 }
 
-register_probe()
-{
-  local probe=$1
-
-  if [ -f "${uprobe_base}/events/${probe_name}/enable" ]; then
-    echo 0 > ${uprobe_base}/events/${probe_name}/enable
-  fi
-
-  echo $probe > ${uprobe_events}
-  if [[ $? == 0 ]]; then
-    printf "Probe %s is registered successfully\n" ${probe}
-  else
-    printf "Probe %s registeration is unsuccessful, probe: %s, uprobe_events: %s\n" "${probe}" ${uprobe_events}
-    exit 1
-  fi
-}
-
-register_rprobe()
-{
-  local rprobe=$1
-
-  if [ -f "${uprobe_base}/events/${probe_name}/enable" ]; then
-    echo 0 > ${uprobe_base}/events/${probe_name}/enable
-  fi
-
-  echo $rprobe >> ${uprobe_events}
-  if [[ $? == 0 ]]; then
-    printf "Probe %s is registered successfully\n" ${rprobe}
-  else
-    printf "Probe %s registeration is unsuccessful, probe: %s, uprobe_events: %s\n" "${rprobe}" ${uprobe_events}
-    exit 1
-  fi
-}
-
 live_probe()
 {
   local pid=$1
-  local lines=$(gen_probe "$args" | wc -l)
-  if [[ $lines > 3 ]]; then
-    printf "You have more than one probe options, pick the one you prefer\n"
-    gen_probe "$args"
-    exit 1
-  fi
 
-  local probe=$(gen_probe "$args" 2>/dev/null | grep 'p:probe')
-  local rprobe=$(gen_rprobe $exe 2>/dev/null | grep 'r:probe')
-  rfunc=$(get_func_name "^r:probe" $rprobe)
-  local probe_name=$(get_probe_name "^p:probe" $probe)
-  local rprobe_name=$(get_probe_name "^r:probe" $rprobe)
+  probe_ops "register"
 
-  register_probe "$probe"
-  register_rprobe "$rprobe"
   if [ ! -z "${pid}" ]; then
     set_pid_filter $pid "$probe" "^p:probe"
     set_pid_filter $pid "$rprobe" "^r:probe"
   fi
-  enable_probe "$probe"
+  enable_probe
   printf "\n\nTracing $probe, press ctrl + c to cancel..\n\n"
   cat ${uprobe_base}/trace_pipe 
+}
+
+write_probes_files()
+{
+  > ${probes}
+  > ${rprobes}
+  perf probe -x $exe --dry-run -D "${func} $args" > ${tmp_probes}
+  local i=0
+  cat ${tmp_probes} | while read line; do
+    echo "$line" | sed -e "s/${func}[^ ]* /${func}${i} /" >> /tmp/probes
+    i=$(expr $i + 1)
+  done
+  perf probe -x $exe --dry-run -D "${func}%return \$retval" > ${tmp_rprobes}
+  local i=0
+  cat ${tmp_rprobes} | while read line; do
+    echo $line | sed -e "s/${func}[^ ]* /${func}_return${i} /" >> /tmp/rprobes
+    i=$(expr $i + 1)
+  done
+}
+
+probe_ops()
+{
+  local opt=$1
+
+  if [[ ${opt} == "register" ]]; then
+    cat ${probes} | while read line; do
+      echo "$line" >> $uprobe_events
+    done
+    cat ${rprobes} | while read line; do
+      echo "$line" >> $uprobe_events
+    done
+  elif [[ ${opt} == "unregister" ]]; then
+    cat ${probes} | while read line; do
+      local revoked_probe=$(echo "'$line'" | awk -F' ' '{ print $1 }' | awk -F':' '{ print $2 }')
+      echo "-:${revoked_probe}" >> $uprobe_events
+    done
+    cat ${rprobes} | while read line; do
+      local revoked_probe=$(echo "'$line'" | awk -F' ' '{ print $1 }' | awk -F':' '{ print $2 }')
+      echo "-:${revoked_probe}" >> $uprobe_events
+    done
+  elif [[ ${opt} == "show" ]]; then
+    cat ${probes} | while read line; do
+      echo "'$line'"
+    done
+    cat ${rprobes} | while read line; do
+      echo "'$line'"
+    done
+  elif [[ ${opt} == "enable" ]]; then
+    cat ${probes} | awk -F' ' '{ print $1 }' | awk -F':' '{ print $2 }' | while read line; do
+      echo 1 > ${events}/${line}/enable
+    done
+    i=0
+    cat ${rprobes} | awk -F' ' '{ print $1 }' | awk -F':' '{ print $2 }' | while read line; do
+      echo 1 > ${events}/${line}/enable
+    done
+  elif [[ ${opt} == "disable" ]]; then
+    cat ${probes} | awk -F' ' '{ print $1 }' | awk -F':' '{ print $2 }' | while read line; do
+      echo 0 > ${events}/${line}/enable
+    done
+    i=0
+    cat ${rprobes} | awk -F' ' '{ print $1 }' | awk -F':' '{ print $2 }' | while read line; do
+      echo 0 > ${events}/${line}/enable
+    done
+  else
+    printf "probe_ops: Unknown option\n"
+    exit 1
+  fi
 }
 
 gen_probe()
 {
   local args=$1
-  perf probe -x $exe --dry-run -D "$func ${args}"
-}
 
-gen_rprobe()
-{
-  perf probe -x $exe --dry-run -D "${func}%return \$retval"
+  write_probes_files
+  probe_ops "show"
 }
 
 list_exec_funcs()
@@ -219,7 +232,7 @@ is_func_exist()
   local func_name=$(echo $func | awk -F':' '{ print $1 }')
   local func_idx=$(echo $func | awk -F':' '{ print $2 }')
 
-  list_exec_funcs $exe | grep $func_name
+  list_exec_funcs $exe | grep -w $func_name
   if [[ $? != 0 ]]; then
     printf "Unable to find the function %s in the executable %s\n" $func_name $exe
     show_help
@@ -270,7 +283,6 @@ case "$choice" in
 	args=$1
 
         gen_probe "${args}"
-        gen_rprobe
   	printf "\nYou need to register your probe in %s, live trace on %s, and later you need to deregister manually too\n" ${uprobe_events} "${uprobe_base}/trace_pipe"
         ;;
     4)
