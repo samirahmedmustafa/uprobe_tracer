@@ -120,8 +120,7 @@ live_probe()
   probe_ops "register"
 
   if [ ! -z "${pid}" ]; then
-    set_pid_filter $pid "$probe" "^p:probe"
-    set_pid_filter $pid "$rprobe" "^r:probe"
+    probe_ops "filter" $pid
   fi
   enable_probe
   printf "\n\nTracing $probe, press ctrl + c to cancel..\n\n"
@@ -188,6 +187,15 @@ probe_ops()
     i=0
     cat ${rprobes} | awk -F' ' '{ print $1 }' | awk -F':' '{ print $2 }' | while read line; do
       echo 0 > ${events}/${line}/enable
+    done
+  elif [[ ${opt} == "filter" ]]; then
+    local pid=$2
+    cat ${probes} | awk -F' ' '{ print $1 }' | awk -F':' '{ print $2 }' | while read line; do
+      echo "common_pid == $pid" > ${events}/${line}/filter
+    done
+    i=0
+    cat ${rprobes} | awk -F' ' '{ print $1 }' | awk -F':' '{ print $2 }' | while read line; do
+      echo "common_pid == $pid" > ${events}/${line}/filter
     done
   else
     printf "probe_ops: Unknown option\n"
