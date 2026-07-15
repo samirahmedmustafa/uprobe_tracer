@@ -117,6 +117,7 @@ live_probe()
 {
   local pid=$1
 
+  write_probes_files
   probe_ops "register"
 
   if [ ! -z "${pid}" ]; then
