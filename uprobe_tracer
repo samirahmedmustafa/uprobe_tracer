@@ -144,7 +144,7 @@ write_probes_files()
     echo "$line" | sed -e "s/${func}[^ ]* /${func}${i} /" >> /tmp/probes
     i=$(expr $i + 1)
   done
-  perf probe -x $exe --dry-run -D "${func}%return \$retval" > ${tmp_rprobes}
+  perf probe -x $exe --dry-run -D "${func}%return \$retval:s64" > ${tmp_rprobes}
   local i=0
   cat ${tmp_rprobes} | while read line; do
     echo $line | sed -e "s/${func}[^ ]* /${func}_return${i} /" >> /tmp/rprobes
