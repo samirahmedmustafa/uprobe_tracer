@@ -3,12 +3,16 @@
 
 uprobe_base="/sys/kernel/debug/tracing"
 events="${uprobe_base}/events"
-unm=$(uname -r | grep ^5 | awk -F'.' '{ print $1 }')
-if [ ${unm} -ge 5 ]; then
+
+release=$(cat /etc/os-release | grep ^NAME | awk -F'=' '{ print $2 }' | tr -d '"')
+if [[ ${release} =~ Red.* ]]; then
+  uprobes="${events}"
+elif [[ ${release} =~ Rocky.* ]]; then
   uprobes="${events}/uprobes"
 else
-  uprobes="${events}"
+  uprobes="${events}/uprobes"
 fi
+
 uprobe_events="${uprobe_base}/uprobe_events"
 exe=""
 args=""
@@ -18,16 +22,6 @@ tmp_probes=/tmp/tmp_probes
 tmp_rprobes=/tmp/tmp_rprobes
 probes=/tmp/probes
 rprobes=/tmp/rprobes
-#probe_name=""
-#rprobe_name=""
-#probe=""
-#rprobe=""
-
-#probe_path=""
-
-#rprobe_name=""
-#rprobe_path=""
-#func_name=""
 
 show_help()
 {
@@ -92,7 +86,7 @@ get_probe_path()
 {
   local probe_name=$1
 
-  echo "${uprobe_base}/events/${probe_name}/enable"
+  echo "${uprobes}/${probe_name}/enable"
 }
 
 enable_probe()
@@ -119,21 +113,6 @@ set_pid_filter()
   fi
 }
 
-live_probe()
-{
-  local pid=$1
-
-  write_probes_files
-  probe_ops "register"
-
-  if [ ! -z "${pid}" ]; then
-    probe_ops "filter" $pid
-  fi
-  enable_probe
-  printf "\n\nTracing $probe, press ctrl + c to cancel..\n\n"
-  cat ${uprobe_base}/trace_pipe 
-}
-
 write_probes_files()
 {
   > ${probes}
@@ -152,13 +131,39 @@ write_probes_files()
   done
 }
 
+live_probe()
+{
+  local pid=$1
+
+  write_probes_files
+  probe_ops "register"
+
+  if [ ! -z "${pid}" ]; then
+    probe_ops "filter" $pid
+  fi
+
+  enable_probe
+  printf "\n\nTracing $probe, press ctrl + c to cancel..\n\n"
+  cat ${uprobe_base}/trace_pipe 
+}
+
 probe_ops()
 {
   local opt=$1
 
   if [[ ${opt} == "register" ]]; then
+    > ${uprobe_events}
     cat ${probes} | while read line; do
+      local probe_name=$(echo $line | awk -F' ' '{ print $1 }' | awk -F':' '{ print $2 }' | awk -F'/' '{ print $1 }')
+      #probe_enable="${uprobes}/${short_probe}/enable"
+      #if [[ -f ${probe_enable} ]]; then
+      #   echo 0 > ${probe_enable}
+      #fi
       echo "$line" >> $uprobe_events
+      if [[ $? != 0 ]]; then
+	      printf "Manually disable previous probes (echo 0 > ${uprobes}/${probe_name}/enable)\n\n"
+	 exit 1
+      fi
     done
     cat ${rprobes} | while read line; do
       echo "$line" >> $uprobe_events
