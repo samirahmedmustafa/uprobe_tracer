@@ -1,8 +1,14 @@
 #!/bin/sh
 #set -eo pipefail
 
-events="/sys/kernel/debug/tracing/events"
 uprobe_base="/sys/kernel/debug/tracing"
+events="${uprobe_base}/events"
+unm=$(uname -r | grep ^5 | awk -F'.' '{ print $1 }')
+if [ ${unm} -ge 5 ]; then
+  uprobes="${events}/uprobes"
+else
+  uprobes="${events}"
+fi
 uprobe_events="${uprobe_base}/uprobe_events"
 exe=""
 args=""
@@ -102,8 +108,8 @@ set_pid_filter()
   local probe_type=$3
   local probe_name=$(get_probe_name ${probe_type} $probe)
   local probe_path=$(get_probe_path ${probe_name})
-  local filter_path="${uprobe_base}/events/${probe_name}/${func}/filter"
-  local rfilter_path="${uprobe_base}/events/${probe_name}/${rfunc}/filter"
+  local filter_path="{uprobes}/${probe_name}/${func}/filter"
+  local rfilter_path="${uprobes}/${probe_name}/${rfunc}/filter"
 
   if [ -z $pid ]; then
     printf "No pid is submitted for filtering, pid: %d\n" $pid 
@@ -175,19 +181,19 @@ probe_ops()
     done
   elif [[ ${opt} == "enable" ]]; then
     cat ${probes} | awk -F' ' '{ print $1 }' | awk -F':' '{ print $2 }' | while read line; do
-      echo 1 > ${events}/${line}/enable
+      echo 1 > ${uprobes}/${line}/enable
     done
     i=0
     cat ${rprobes} | awk -F' ' '{ print $1 }' | awk -F':' '{ print $2 }' | while read line; do
-      echo 1 > ${events}/${line}/enable
+      echo 1 > ${uprobes}/${line}/enable
     done
   elif [[ ${opt} == "disable" ]]; then
     cat ${probes} | awk -F' ' '{ print $1 }' | awk -F':' '{ print $2 }' | while read line; do
-      echo 0 > ${events}/${line}/enable
+      echo 0 > ${uprobes}/${line}/enable
     done
     i=0
     cat ${rprobes} | awk -F' ' '{ print $1 }' | awk -F':' '{ print $2 }' | while read line; do
-      echo 0 > ${events}/${line}/enable
+      echo 0 > ${uprobes}/${line}/enable
     done
   elif [[ ${opt} == "filter" ]]; then
     local pid=$2
