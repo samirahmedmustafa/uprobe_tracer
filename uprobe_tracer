@@ -8,7 +8,7 @@ release=$(cat /etc/os-release | grep ^NAME | awk -F'=' '{ print $2 }' | tr -d '"
 if [[ ${release} =~ Red.* ]]; then
   uprobes="${events}"
 elif [[ ${release} =~ Rocky.* ]]; then
-  uprobes="${events}/uprobes"
+  uprobes="${events}"
 else
   uprobes="${events}/uprobes"
 fi
@@ -186,6 +186,7 @@ probe_ops()
     done
   elif [[ ${opt} == "enable" ]]; then
     cat ${probes} | awk -F' ' '{ print $1 }' | awk -F':' '{ print $2 }' | while read line; do
+      printf "enabling ${uprobes}/${line}/enable\n"
       echo 1 > ${uprobes}/${line}/enable
     done
     i=0
